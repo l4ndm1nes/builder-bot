@@ -1,0 +1,10 @@
+python-telegram-bot
+python-dotenv
+gspread
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+sqlalchemy
+psycopg2-binary
+fastapi
+uvicorn
