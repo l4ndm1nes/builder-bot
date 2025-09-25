@@ -3,6 +3,8 @@ from google.oauth2.service_account import Credentials
 from config import Config
 from datetime import datetime
 import logging
+import json
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -21,10 +23,23 @@ class GoogleSheetsManager:
             ]
             
             # Загрузка учетных данных
-            creds = Credentials.from_service_account_file(
-                Config.GOOGLE_SHEETS_CREDENTIALS_FILE, 
-                scopes=scope
-            )
+            # Сначала пробуем из переменной окружения
+            credentials_json = os.getenv('GOOGLE_SHEETS_CREDENTIALS')
+            if credentials_json:
+                # Парсим JSON из переменной окружения
+                credentials_dict = json.loads(credentials_json)
+                creds = Credentials.from_service_account_info(
+                    credentials_dict, 
+                    scopes=scope
+                )
+                logger.info("Используем credentials из переменной окружения")
+            else:
+                # Fallback на файл
+                creds = Credentials.from_service_account_file(
+                    Config.GOOGLE_SHEETS_CREDENTIALS_FILE, 
+                    scopes=scope
+                )
+                logger.info("Используем credentials из файла")
             
             # Подключение к Google Sheets
             gc = gspread.authorize(creds)
