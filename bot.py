@@ -161,6 +161,12 @@ class ConstructionBot:
             elif data == "set_phone":
                 logger.info("button_callback: Обрабатываем set_phone")
                 await self.set_phone(query, context)
+            elif data == "contact_message":
+                logger.info("button_callback: Обрабатываем contact_message")
+                await self.handle_contact_preference(query, context, "message")
+            elif data == "contact_call":
+                logger.info("button_callback: Обрабатываем contact_call")
+                await self.handle_contact_preference(query, context, "call")
             else:
                 # Обработка неизвестных callback'ов
                 logger.warning(f"button_callback: Неизвестный callback: {data}")
@@ -517,6 +523,28 @@ class ConstructionBot:
             logger.error(f"handle_phone_input: Ошибка: {e}", exc_info=True)
             await update.message.reply_text("Произошла ошибка при сохранении телефона. Попробуйте еще раз.")
     
+    async def handle_contact_preference(self, query, context: ContextTypes.DEFAULT_TYPE, preference: str):
+        """Обрабатывает выбор способа связи"""
+        try:
+            # Получаем данные заявки
+            request_data = context.user_data.get('request_data', {})
+            request_type = context.user_data.get('request_type', 'client')
+            
+            # Добавляем предпочтение связи
+            request_data['contact_preference'] = preference
+            
+            # Очищаем флаги
+            context.user_data.pop('waiting_for_contact_preference', None)
+            context.user_data.pop('request_data', None)
+            context.user_data.pop('request_type', None)
+            
+            # Создаем заявку
+            await self.finish_request_creation(query, context, request_data, request_type)
+            
+        except Exception as e:
+            logger.error(f"handle_contact_preference: Ошибка: {e}", exc_info=True)
+            await query.edit_message_text("Произошла ошибка. Попробуйте еще раз.")
+    
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик текстовых сообщений"""
         if context.user_data.get('creating_request'):
@@ -581,8 +609,8 @@ class ConstructionBot:
         elif step == 5:
             if request_type == 'client':
                 request_data['work_duration'] = text
-                # Создаем заявку
-                await self.finish_request_creation(update, context, request_data, request_type)
+                # Переходим к выбору способа связи
+                await self.ask_contact_preference(update, context, request_data, request_type)
             else:
                 # Обновляем телефон пользователя в базе данных
                 user = update.effective_user
@@ -600,10 +628,32 @@ class ConstructionBot:
                     print(f"Телефон пользователя обновлен: {text}")
                 finally:
                     db.close()
-                # Создаем заявку
-                await self.finish_request_creation(update, context, request_data, request_type)
+                # Переходим к выбору способа связи
+                await self.ask_contact_preference(update, context, request_data, request_type)
         
         context.user_data['request_data'] = request_data
+    
+    async def ask_contact_preference(self, update: Update, context: ContextTypes.DEFAULT_TYPE, request_data: dict, request_type: str):
+        """Спрашивает предпочтения по способу связи"""
+        text = """
+📞 **Как с вами лучше связаться?**
+
+Выберите предпочтительный способ связи:
+        """
+        
+        keyboard = [
+            [InlineKeyboardButton("💬 Написать в Telegram", callback_data="contact_message")],
+            [InlineKeyboardButton("📞 Позвонить по телефону", callback_data="contact_call")],
+            [InlineKeyboardButton("❌ Отмена", callback_data="start_menu")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+        
+        # Устанавливаем флаг ожидания выбора способа связи
+        context.user_data['waiting_for_contact_preference'] = True
+        context.user_data['request_data'] = request_data
+        context.user_data['request_type'] = request_type
     
     async def finish_request_creation(self, update: Update, context: ContextTypes.DEFAULT_TYPE, request_data: dict, request_type: str):
         """Завершает создание заявки"""
@@ -629,6 +679,7 @@ class ConstructionBot:
                 user_id=db_user.id,
                 request_type=request_type,
                 title=title,
+                contact_preference=request_data.get('contact_preference', 'message'),
                 **request_data
             )
             

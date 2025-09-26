@@ -44,6 +44,9 @@ class Request(Base):
     status = Column(String(50), default='active')  # active, matched, completed, cancelled
     matched_with = Column(Integer)  # ID сопоставленной заявки
     
+    # Предпочтения связи
+    contact_preference = Column(String(20), default='message')  # 'message' или 'call'
+    
     # Метаданные
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
