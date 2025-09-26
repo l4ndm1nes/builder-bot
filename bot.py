@@ -155,6 +155,9 @@ class ConstructionBot:
                 request_type = data.split("_")[2]
                 logger.info(f"button_callback: Обрабатываем create_request_{request_type}")
                 await self.create_request_flow(query, context, request_type)
+            elif data == "toggle_mode":
+                logger.info("button_callback: Обрабатываем toggle_mode")
+                await self.toggle_mode(query, context)
             else:
                 # Обработка неизвестных callback'ов
                 logger.warning(f"button_callback: Неизвестный callback: {data}")
@@ -280,7 +283,7 @@ class ConstructionBot:
             
             keyboard = [
                 [InlineKeyboardButton("📞 Указать телефон", callback_data="set_phone")],
-                [InlineKeyboardButton("🔄 Сменить режим", callback_data="toggle_mode")],
+                [InlineKeyboardButton("🔄 Переключить режим", callback_data="toggle_mode")],
                 [InlineKeyboardButton("🏠 Главное меню", callback_data="start_menu")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -392,6 +395,34 @@ class ConstructionBot:
                     await update.callback_query.edit_message_text(error_text)
             except Exception as e2:
                 logger.error(f"show_my_requests: Ошибка при отправке сообщения об ошибке: {e2}")
+    
+    async def toggle_mode(self, query, context: ContextTypes.DEFAULT_TYPE):
+        """Переключает режим пользователя между клиентом и исполнителем"""
+        try:
+            user = query.from_user
+            db_user = get_or_create_user(
+                telegram_id=user.id,
+                username=user.username,
+                first_name=user.first_name,
+                last_name=user.last_name
+            )
+            
+            # Переключаем режим
+            db_user.is_contractor = not db_user.is_contractor
+            from database import SessionLocal
+            db = SessionLocal()
+            try:
+                db.merge(db_user)
+                db.commit()
+            finally:
+                db.close()
+            
+            # Показываем обновленное меню
+            await self.start_command(query, context)
+            
+        except Exception as e:
+            logger.error(f"toggle_mode: Ошибка: {e}", exc_info=True)
+            await query.edit_message_text("Произошла ошибка при переключении режима. Попробуйте еще раз.")
     
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик текстовых сообщений"""
