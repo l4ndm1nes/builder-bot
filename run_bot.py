@@ -32,6 +32,13 @@ def main():
     try:
         logger.info("🚀 Запуск бота диспетчеризации строительной техники...")
         
+        # Инициализируем базу данных
+        logger.info("🏗️ Инициализация базы данных...")
+        from database import engine, Base
+        from models import User, Request
+        Base.metadata.create_all(bind=engine)
+        logger.info("✅ База данных инициализирована")
+        
         # Запускаем веб-сервер в отдельном потоке
         web_thread = threading.Thread(target=run_web_server, daemon=True)
         web_thread.start()
