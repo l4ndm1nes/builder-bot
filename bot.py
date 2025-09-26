@@ -158,6 +158,9 @@ class ConstructionBot:
             elif data == "toggle_mode":
                 logger.info("button_callback: Обрабатываем toggle_mode")
                 await self.toggle_mode(query, context)
+            elif data == "set_phone":
+                logger.info("button_callback: Обрабатываем set_phone")
+                await self.set_phone(query, context)
             else:
                 # Обработка неизвестных callback'ов
                 logger.warning(f"button_callback: Неизвестный callback: {data}")
@@ -424,10 +427,102 @@ class ConstructionBot:
             logger.error(f"toggle_mode: Ошибка: {e}", exc_info=True)
             await query.edit_message_text("Произошла ошибка при переключении режима. Попробуйте еще раз.")
     
+    async def set_phone(self, query, context: ContextTypes.DEFAULT_TYPE):
+        """Запрашивает у пользователя номер телефона"""
+        try:
+            text = """
+📞 **Укажите номер телефона**
+
+Пожалуйста, отправьте ваш номер телефона в формате:
+• +380501234567
+• 0501234567
+• (050) 123-45-67
+
+Это поможет другим пользователям связаться с вами.
+            """
+            
+            keyboard = [
+                [InlineKeyboardButton("❌ Отмена", callback_data="start_menu")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+            
+            # Устанавливаем флаг ожидания телефона
+            context.user_data['waiting_for_phone'] = True
+            
+        except Exception as e:
+            logger.error(f"set_phone: Ошибка: {e}", exc_info=True)
+            await query.edit_message_text("Произошла ошибка. Попробуйте еще раз.")
+    
+    async def handle_phone_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обрабатывает ввод номера телефона"""
+        try:
+            phone = update.message.text.strip()
+            
+            # Простая валидация телефона
+            import re
+            phone_pattern = r'^(\+?38)?0\d{9}$'
+            clean_phone = re.sub(r'[^\d+]', '', phone)
+            
+            if not re.match(phone_pattern, clean_phone):
+                await update.message.reply_text(
+                    "❌ Неверный формат номера телефона.\n\n"
+                    "Пожалуйста, используйте формат:\n"
+                    "• +380501234567\n"
+                    "• 0501234567\n\n"
+                    "Попробуйте еще раз:"
+                )
+                return
+            
+            # Сохраняем телефон в базе данных
+            user = update.effective_user
+            db_user = get_or_create_user(
+                telegram_id=user.id,
+                username=user.username,
+                first_name=user.first_name,
+                last_name=user.last_name
+            )
+            
+            db_user.phone = clean_phone
+            from database import SessionLocal
+            db = SessionLocal()
+            try:
+                db.merge(db_user)
+                db.commit()
+            finally:
+                db.close()
+            
+            # Очищаем флаг ожидания
+            context.user_data.pop('waiting_for_phone', None)
+            
+            # Показываем успешное сообщение
+            success_text = f"""
+✅ **Номер телефона сохранен!**
+
+📞 Ваш телефон: {clean_phone}
+
+Теперь другие пользователи смогут связаться с вами.
+            """
+            
+            keyboard = [
+                [InlineKeyboardButton("👤 Мой профиль", callback_data="profile")],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data="start_menu")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.message.reply_text(success_text, reply_markup=reply_markup, parse_mode='Markdown')
+            
+        except Exception as e:
+            logger.error(f"handle_phone_input: Ошибка: {e}", exc_info=True)
+            await update.message.reply_text("Произошла ошибка при сохранении телефона. Попробуйте еще раз.")
+    
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик текстовых сообщений"""
         if context.user_data.get('creating_request'):
             await self.handle_request_creation(update, context)
+        elif context.user_data.get('waiting_for_phone'):
+            await self.handle_phone_input(update, context)
         else:
             await update.message.reply_text(
                 "Используйте команды или кнопки для навигации. /help - для справки."
