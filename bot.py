@@ -7,6 +7,10 @@ from models import User, Request
 from config import Config
 import re
 
+def is_admin(user_id):
+    """Проверяет, является ли пользователь админом"""
+    return user_id == Config.ADMIN_USER_ID
+
 # Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -26,6 +30,12 @@ class ConstructionBot:
         self.application.add_handler(CommandHandler("help", self.help_command))
         self.application.add_handler(CommandHandler("profile", self.profile_command))
         self.application.add_handler(CommandHandler("my_requests", self.my_requests_command))
+        
+        # Админ-команды
+        self.application.add_handler(CommandHandler("admin", self.admin_command))
+        self.application.add_handler(CommandHandler("users", self.users_command))
+        self.application.add_handler(CommandHandler("requests", self.requests_command))
+        self.application.add_handler(CommandHandler("send", self.send_message_command))
         
         # Обработчики кнопок
         self.application.add_handler(CallbackQueryHandler(self.button_callback))
@@ -115,6 +125,12 @@ class ConstructionBot:
 /help - Эта справка
 /profile - Настройки профиля
 /my_requests - Мои заявки
+
+**Админ-команды:**
+/admin - Админ-панель
+/users - Список пользователей
+/requests - Все заявки
+/send <user_id> <сообщение> - Отправить сообщение
         """
         await update.message.reply_text(help_text)
     
@@ -125,6 +141,146 @@ class ConstructionBot:
     async def my_requests_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /my_requests"""
         await self.show_my_requests(update, context)
+    
+    async def admin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Админ-панель"""
+        user_id = update.effective_user.id
+        
+        if not is_admin(user_id):
+            await update.message.reply_text("❌ У вас нет прав администратора.")
+            return
+        
+        text = """
+🔧 **Админ-панель**
+
+**Доступные команды:**
+• `/users` - Список пользователей
+• `/requests` - Все заявки
+• `/send <user_id> <сообщение>` - Отправить сообщение пользователю
+
+**Статистика:**
+        """
+        
+        # Получаем статистику
+        from database import SessionLocal, User, Request
+        db = SessionLocal()
+        try:
+            total_users = db.query(User).count()
+            active_requests = db.query(Request).filter(Request.status == 'active').count()
+            clients = db.query(User).filter(User.is_contractor == False).count()
+            contractors = db.query(User).filter(User.is_contractor == True).count()
+            
+            text += f"""
+👥 Пользователей: {total_users}
+   • Клиентов: {clients}
+   • Исполнителей: {contractors}
+📋 Активных заявок: {active_requests}
+            """
+        finally:
+            db.close()
+        
+        await update.message.reply_text(text, parse_mode='Markdown')
+    
+    async def users_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Список пользователей"""
+        user_id = update.effective_user.id
+        
+        if not is_admin(user_id):
+            await update.message.reply_text("❌ У вас нет прав администратора.")
+            return
+        
+        from database import SessionLocal, User
+        db = SessionLocal()
+        try:
+            users = db.query(User).order_by(User.created_at.desc()).limit(10).all()
+            
+            text = "👥 **Последние 10 пользователей:**\n\n"
+            for user in users:
+                role = "🚛 Исполнитель" if user.is_contractor else "🔍 Клиент"
+                phone = user.phone or "Не указан"
+                text += f"• {user.first_name} {user.last_name or ''}\n"
+                text += f"  ID: {user.telegram_id} | {role}\n"
+                text += f"  📞 {phone}\n"
+                text += f"  📅 {user.created_at.strftime('%d.%m.%Y')}\n\n"
+            
+            if not users:
+                text = "👥 Пользователей пока нет."
+                
+        finally:
+            db.close()
+        
+        await update.message.reply_text(text, parse_mode='Markdown')
+    
+    async def requests_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Все заявки"""
+        user_id = update.effective_user.id
+        
+        if not is_admin(user_id):
+            await update.message.reply_text("❌ У вас нет прав администратора.")
+            return
+        
+        from database import SessionLocal, Request, User
+        db = SessionLocal()
+        try:
+            requests = db.query(Request).order_by(Request.created_at.desc()).limit(10).all()
+            
+            text = "📋 **Последние 10 заявок:**\n\n"
+            for req in requests:
+                user = db.query(User).filter(User.id == req.user_id).first()
+                type_emoji = "🔍" if req.request_type == "client" else "🚛"
+                contact_emoji = "💬" if req.contact_preference == "message" else "📞"
+                
+                text += f"{type_emoji} **ID: {req.id}**\n"
+                text += f"👤 {user.first_name if user else 'Неизвестно'}\n"
+                text += f"📍 {req.location}\n"
+                text += f"📝 {req.title}\n"
+                text += f"{contact_emoji} {req.contact_preference}\n"
+                text += f"📅 {req.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
+            
+            if not requests:
+                text = "📋 Заявок пока нет."
+                
+        finally:
+            db.close()
+        
+        await update.message.reply_text(text, parse_mode='Markdown')
+    
+    async def send_message_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Отправить сообщение пользователю"""
+        user_id = update.effective_user.id
+        
+        if not is_admin(user_id):
+            await update.message.reply_text("❌ У вас нет прав администратора.")
+            return
+        
+        # Парсим команду: /send <user_id> <сообщение>
+        args = context.args
+        if len(args) < 2:
+            await update.message.reply_text(
+                "❌ Неверный формат команды.\n\n"
+                "Использование: `/send <user_id> <сообщение>`\n"
+                "Пример: `/send 123456789 Привет! Как дела?`",
+                parse_mode='Markdown'
+            )
+            return
+        
+        try:
+            target_user_id = int(args[0])
+            message_text = ' '.join(args[1:])
+            
+            # Отправляем сообщение
+            await context.bot.send_message(
+                chat_id=target_user_id,
+                text=f"📨 **Сообщение от администратора:**\n\n{message_text}",
+                parse_mode='Markdown'
+            )
+            
+            await update.message.reply_text(f"✅ Сообщение отправлено пользователю {target_user_id}")
+            
+        except ValueError:
+            await update.message.reply_text("❌ Неверный ID пользователя.")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка отправки: {str(e)}")
     
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик нажатий на кнопки"""
@@ -552,6 +708,56 @@ class ConstructionBot:
         elif context.user_data.get('waiting_for_phone'):
             await self.handle_phone_input(update, context)
         else:
+            # Пересылаем сообщения админу, если это не команда
+            user_id = update.effective_user.id
+            if not update.message.text.startswith('/'):
+                await self.forward_to_admin(update, context)
+            else:
+                await update.message.reply_text(
+                    "Используйте команды или кнопки для навигации. /help - для справки."
+                )
+    
+    async def forward_to_admin(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Пересылает сообщения админу"""
+        try:
+            user = update.effective_user
+            admin_id = Config.ADMIN_USER_ID
+            
+            if admin_id and admin_id != user.id:
+                # Получаем информацию о пользователе
+                from database import SessionLocal, User
+                db = SessionLocal()
+                try:
+                    db_user = db.query(User).filter(User.telegram_id == user.id).first()
+                    user_info = f"👤 {db_user.first_name if db_user else user.first_name} {db_user.last_name if db_user else user.last_name or ''}"
+                    if db_user and db_user.phone:
+                        user_info += f"\n📞 {db_user.phone}"
+                    user_info += f"\n🆔 ID: {user.id}"
+                finally:
+                    db.close()
+                
+                # Пересылаем сообщение админу
+                forward_text = f"""
+📨 **Сообщение от пользователя:**
+
+{user_info}
+
+**Сообщение:**
+{update.message.text}
+                """
+                
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=forward_text,
+                    parse_mode='Markdown'
+                )
+                
+                # Подтверждаем пользователю
+                await update.message.reply_text(
+                    "✅ Ваше сообщение передано администратору. Мы свяжемся с вами в ближайшее время!"
+                )
+        except Exception as e:
+            logger.error(f"forward_to_admin: Ошибка: {e}")
             await update.message.reply_text(
                 "Используйте команды или кнопки для навигации. /help - для справки."
             )
