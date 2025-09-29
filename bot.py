@@ -718,6 +718,10 @@ class ConstructionBot:
     
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик текстовых сообщений"""
+        # Отладочная информация
+        logger.info(f"handle_message: creating_request={context.user_data.get('creating_request')}, waiting_for_phone={context.user_data.get('waiting_for_phone')}, waiting_for_contact_preference={context.user_data.get('waiting_for_contact_preference')}")
+        logger.info(f"handle_message: request_step={context.user_data.get('request_step')}, text='{update.message.text}'")
+        
         if context.user_data.get('creating_request'):
             await self.handle_request_creation(update, context)
         elif context.user_data.get('waiting_for_phone'):
@@ -786,6 +790,10 @@ class ConstructionBot:
         request_data = context.user_data.get('request_data', {})
         request_type = context.user_data.get('request_type')
         step = context.user_data.get('request_step', 1)
+        
+        # Отладочная информация
+        logger.info(f"handle_request_creation: step={step}, request_type={request_type}, text='{text}'")
+        logger.info(f"handle_request_creation: request_data={request_data}")
         
         if step == 1:
             if request_type == 'client':
