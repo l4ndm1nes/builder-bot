@@ -695,10 +695,8 @@ class ConstructionBot:
             # Добавляем предпочтение связи
             request_data['contact_preference'] = preference
             
-            # Очищаем флаги
+            # Очищаем только флаг ожидания
             context.user_data.pop('waiting_for_contact_preference', None)
-            context.user_data.pop('request_data', None)
-            context.user_data.pop('request_type', None)
             
             # Создаем заявку
             await self.finish_request_creation(query, context, request_data, request_type)
@@ -870,9 +868,16 @@ class ConstructionBot:
         context.user_data['request_data'] = request_data
         context.user_data['request_type'] = request_type
     
-    async def finish_request_creation(self, update: Update, context: ContextTypes.DEFAULT_TYPE, request_data: dict, request_type: str):
+    async def finish_request_creation(self, update_or_query, context: ContextTypes.DEFAULT_TYPE, request_data: dict, request_type: str):
         """Завершает создание заявки"""
-        user = update.effective_user
+        # Получаем пользователя в зависимости от типа объекта
+        if hasattr(update_or_query, 'effective_user') and update_or_query.effective_user:
+            user = update_or_query.effective_user
+        elif hasattr(update_or_query, 'from_user') and update_or_query.from_user:
+            user = update_or_query.from_user
+        else:
+            logger.error("finish_request_creation: No user found")
+            return
         from database import SessionLocal
         db = SessionLocal()
         try:
@@ -925,7 +930,13 @@ class ConstructionBot:
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            await update.message.reply_text(success_text, reply_markup=reply_markup)
+            # Отправляем сообщение в зависимости от типа объекта
+            if hasattr(update_or_query, 'message') and update_or_query.message:
+                await update_or_query.message.reply_text(success_text, reply_markup=reply_markup)
+            elif hasattr(update_or_query, 'edit_message_text'):
+                await update_or_query.edit_message_text(success_text, reply_markup=reply_markup)
+            else:
+                logger.error("finish_request_creation: Cannot send message")
             
         finally:
             db.close()
