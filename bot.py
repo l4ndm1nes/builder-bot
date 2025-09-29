@@ -713,6 +713,9 @@ class ConstructionBot:
             await self.handle_request_creation(update, context)
         elif context.user_data.get('waiting_for_phone'):
             await self.handle_phone_input(update, context)
+        elif context.user_data.get('waiting_for_contact_preference'):
+            # Это не должно происходить, так как выбор через кнопки
+            await update.message.reply_text("Пожалуйста, выберите способ связи с помощью кнопок.")
         else:
             # Пересылаем сообщения админу, если это не команда
             user_id = update.effective_user.id
