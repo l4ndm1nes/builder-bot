@@ -704,6 +704,8 @@ class ConstructionBot:
             request_data = context.user_data.get('request_data', {})
             request_type = context.user_data.get('request_type', 'client')
             
+            logger.info(f"handle_contact_preference: preference={preference}, request_data={request_data}")
+            
             # Добавляем предпочтение связи
             request_data['contact_preference'] = preference
             
@@ -899,14 +901,17 @@ class ConstructionBot:
     
     async def finish_request_creation(self, update_or_query, context: ContextTypes.DEFAULT_TYPE, request_data: dict, request_type: str):
         """Завершает создание заявки"""
-        # Получаем пользователя в зависимости от типа объекта
-        if hasattr(update_or_query, 'effective_user') and update_or_query.effective_user:
-            user = update_or_query.effective_user
-        elif hasattr(update_or_query, 'from_user') and update_or_query.from_user:
-            user = update_or_query.from_user
-        else:
-            logger.error("finish_request_creation: No user found")
-            return
+        try:
+            logger.info(f"finish_request_creation: request_data={request_data}, request_type={request_type}")
+            
+            # Получаем пользователя в зависимости от типа объекта
+            if hasattr(update_or_query, 'effective_user') and update_or_query.effective_user:
+                user = update_or_query.effective_user
+            elif hasattr(update_or_query, 'from_user') and update_or_query.from_user:
+                user = update_or_query.from_user
+            else:
+                logger.error("finish_request_creation: No user found")
+                return
         from database import SessionLocal
         db = SessionLocal()
         try:
