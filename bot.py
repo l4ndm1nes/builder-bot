@@ -791,15 +791,18 @@ class ConstructionBot:
             if request_type == 'client':
                 request_data['equipment_type'] = text
                 context.user_data['request_step'] = 2
+                context.user_data['request_data'] = request_data
                 await update.message.reply_text("Шаг 2/5: Локация\n\nУкажите город или область, где нужна техника:")
             else:
                 request_data['available_equipment'] = text
                 context.user_data['request_step'] = 2
+                context.user_data['request_data'] = request_data
                 await update.message.reply_text("Шаг 2/5: Локация\n\nУкажите город или область, где вы работаете:")
         
         elif step == 2:
             request_data['location'] = text
             context.user_data['request_step'] = 3
+            context.user_data['request_data'] = request_data
             if request_type == 'client':
                 await update.message.reply_text("Шаг 3/5: Описание работ\n\nОпишите, какие работы нужно выполнить:")
             else:
@@ -809,11 +812,13 @@ class ConstructionBot:
             if request_type == 'client':
                 request_data['description'] = text
                 context.user_data['request_step'] = 4
+                context.user_data['request_data'] = request_data
                 await update.message.reply_text("Шаг 4/5: Бюджет\n\nУкажите ваш бюджет в гривнах:")
             else:
                 try:
                     request_data['experience_years'] = int(text)
                     context.user_data['request_step'] = 4
+                    context.user_data['request_data'] = request_data
                     await update.message.reply_text("Шаг 4/5: Цена за час\n\nУкажите стоимость аренды за час в гривнах:")
                 except ValueError:
                     await update.message.reply_text("Пожалуйста, укажите количество лет числом:")
@@ -824,6 +829,7 @@ class ConstructionBot:
                 try:
                     request_data['budget'] = float(text)
                     context.user_data['request_step'] = 5
+                    context.user_data['request_data'] = request_data
                     await update.message.reply_text("Шаг 5/5: Сроки\n\nНа сколько дней нужна техника?")
                 except ValueError:
                     await update.message.reply_text("Пожалуйста, укажите бюджет числом:")
@@ -832,6 +838,7 @@ class ConstructionBot:
                 try:
                     request_data['price_per_hour'] = float(text)
                     context.user_data['request_step'] = 5
+                    context.user_data['request_data'] = request_data
                     await update.message.reply_text("Шаг 5/5: Контактная информация\n\nУкажите ваш номер телефона:")
                 except ValueError:
                     await update.message.reply_text("Пожалуйста, укажите цену числом:")
@@ -840,6 +847,7 @@ class ConstructionBot:
         elif step == 5:
             if request_type == 'client':
                 request_data['work_duration'] = text
+                context.user_data['request_data'] = request_data
                 # Переходим к выбору способа связи
                 await self.ask_contact_preference(update, context, request_data, request_type)
             else:
@@ -860,9 +868,8 @@ class ConstructionBot:
                 finally:
                     db.close()
                 # Переходим к выбору способа связи
+                context.user_data['request_data'] = request_data
                 await self.ask_contact_preference(update, context, request_data, request_type)
-        
-        context.user_data['request_data'] = request_data
     
     async def ask_contact_preference(self, update: Update, context: ContextTypes.DEFAULT_TYPE, request_data: dict, request_type: str):
         """Спрашивает предпочтения по способу связи"""
