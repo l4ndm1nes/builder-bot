@@ -38,7 +38,8 @@ class RequestHandler:
             'step': 0,
             'data': {}
         }
-        return self.get_current_step_question(context)
+        # Возвращаем первый вопрос
+        return self.steps[request_type][0]['question']
     
     def get_current_step_question(self, context: ContextTypes.DEFAULT_TYPE):
         """Возвращает вопрос для текущего шага"""

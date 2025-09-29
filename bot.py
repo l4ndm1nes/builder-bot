@@ -689,12 +689,20 @@ class ConstructionBot:
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик текстовых сообщений"""
         
+        # Отладочная информация
+        logger.info(f"📨 handle_message: text='{update.message.text}'")
+        logger.info(f"📊 user_data keys: {list(context.user_data.keys())}")
+        logger.info(f"🔍 request_handler: {context.user_data.get('request_handler')}")
+        
         # Проверяем, создается ли заявка через новый обработчик
         if context.user_data.get('request_handler'):
+            logger.info("✅ Используем новый обработчик")
             await self.handle_new_request_step(update, context)
         elif context.user_data.get('waiting_for_phone'):
+            logger.info("📞 Обрабатываем ввод телефона")
             await self.handle_phone_input(update, context)
         else:
+            logger.info("❌ Нет активных процессов, показываем справку")
             await update.message.reply_text(
                 "Используйте команды или кнопки для навигации. /help - для справки."
             )
