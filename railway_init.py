@@ -26,3 +26,4 @@ def init_railway_db():
 if __name__ == "__main__":
     success = init_railway_db()
     sys.exit(0 if success else 1)
+

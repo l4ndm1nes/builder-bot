@@ -3,6 +3,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from database import get_or_create_user, create_request, get_active_requests, find_matches
 from google_sheets import sheets_manager
+from sync_sheets import sheets_sync
 from models import User, Request
 from config import Config
 import re
@@ -36,6 +37,7 @@ class ConstructionBot:
         self.application.add_handler(CommandHandler("users", self.users_command))
         self.application.add_handler(CommandHandler("requests", self.requests_command))
         self.application.add_handler(CommandHandler("send", self.send_message_command))
+        self.application.add_handler(CommandHandler("sync", self.sync_command))
         
         # Обработчики кнопок
         self.application.add_handler(CallbackQueryHandler(self.button_callback))
@@ -131,6 +133,7 @@ class ConstructionBot:
 /users - Список пользователей
 /requests - Все заявки
 /send <user_id> <сообщение> - Отправить сообщение
+/sync - Синхронизировать Google Sheets с БД
         """
         await update.message.reply_text(help_text)
     
@@ -287,6 +290,26 @@ class ConstructionBot:
             await update.message.reply_text("❌ Неверный ID пользователя.")
         except Exception as e:
             await update.message.reply_text(f"❌ Ошибка отправки: {str(e)}")
+    
+    async def sync_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Синхронизация Google Sheets с БД"""
+        user_id = update.effective_user.id
+        
+        if not is_admin(user_id):
+            await update.message.reply_text("❌ У вас нет прав администратора.")
+            return
+        
+        try:
+            await update.message.reply_text("🔄 Начинаю синхронизацию Google Sheets с БД...")
+            
+            # Запускаем синхронизацию
+            sheets_sync.sync_all_requests()
+            
+            await update.message.reply_text("✅ Синхронизация завершена! Google Sheets обновлен.")
+            
+        except Exception as e:
+            logger.error(f"sync_command: Ошибка: {e}", exc_info=True)
+            await update.message.reply_text(f"❌ Ошибка синхронизации: {str(e)}")
     
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик нажатий на кнопки"""
@@ -762,18 +785,21 @@ class ConstructionBot:
         text = update.message.text
         request_data = context.user_data.get('request_data', {})
         request_type = context.user_data.get('request_type')
-        step = len(request_data) + 1
+        step = context.user_data.get('request_step', 1)
         
         if step == 1:
             if request_type == 'client':
                 request_data['equipment_type'] = text
+                context.user_data['request_step'] = 2
                 await update.message.reply_text("Шаг 2/5: Локация\n\nУкажите город или область, где нужна техника:")
             else:
                 request_data['available_equipment'] = text
+                context.user_data['request_step'] = 2
                 await update.message.reply_text("Шаг 2/5: Локация\n\nУкажите город или область, где вы работаете:")
         
         elif step == 2:
             request_data['location'] = text
+            context.user_data['request_step'] = 3
             if request_type == 'client':
                 await update.message.reply_text("Шаг 3/5: Описание работ\n\nОпишите, какие работы нужно выполнить:")
             else:
@@ -782,10 +808,12 @@ class ConstructionBot:
         elif step == 3:
             if request_type == 'client':
                 request_data['description'] = text
+                context.user_data['request_step'] = 4
                 await update.message.reply_text("Шаг 4/5: Бюджет\n\nУкажите ваш бюджет в гривнах:")
             else:
                 try:
                     request_data['experience_years'] = int(text)
+                    context.user_data['request_step'] = 4
                     await update.message.reply_text("Шаг 4/5: Цена за час\n\nУкажите стоимость аренды за час в гривнах:")
                 except ValueError:
                     await update.message.reply_text("Пожалуйста, укажите количество лет числом:")
@@ -795,6 +823,7 @@ class ConstructionBot:
             if request_type == 'client':
                 try:
                     request_data['budget'] = float(text)
+                    context.user_data['request_step'] = 5
                     await update.message.reply_text("Шаг 5/5: Сроки\n\nНа сколько дней нужна техника?")
                 except ValueError:
                     await update.message.reply_text("Пожалуйста, укажите бюджет числом:")
@@ -802,6 +831,7 @@ class ConstructionBot:
             else:
                 try:
                     request_data['price_per_hour'] = float(text)
+                    context.user_data['request_step'] = 5
                     await update.message.reply_text("Шаг 5/5: Контактная информация\n\nУкажите ваш номер телефона:")
                 except ValueError:
                     await update.message.reply_text("Пожалуйста, укажите цену числом:")
@@ -836,25 +866,30 @@ class ConstructionBot:
     
     async def ask_contact_preference(self, update: Update, context: ContextTypes.DEFAULT_TYPE, request_data: dict, request_type: str):
         """Спрашивает предпочтения по способу связи"""
-        text = """
+        try:
+            text = """
 📞 **Как с вами лучше связаться?**
 
 Выберите предпочтительный способ связи:
-        """
-        
-        keyboard = [
-            [InlineKeyboardButton("💬 Написать в Telegram", callback_data="contact_message")],
-            [InlineKeyboardButton("📞 Позвонить по телефону", callback_data="contact_call")],
-            [InlineKeyboardButton("❌ Отмена", callback_data="start_menu")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
-        
-        # Устанавливаем флаг ожидания выбора способа связи
-        context.user_data['waiting_for_contact_preference'] = True
-        context.user_data['request_data'] = request_data
-        context.user_data['request_type'] = request_type
+            """
+            
+            keyboard = [
+                [InlineKeyboardButton("💬 Написать в Telegram", callback_data="contact_message")],
+                [InlineKeyboardButton("📞 Позвонить по телефону", callback_data="contact_call")],
+                [InlineKeyboardButton("❌ Отмена", callback_data="start_menu")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+            
+            # Устанавливаем флаг ожидания выбора способа связи
+            context.user_data['waiting_for_contact_preference'] = True
+            context.user_data['request_data'] = request_data
+            context.user_data['request_type'] = request_type
+            
+        except Exception as e:
+            logger.error(f"ask_contact_preference: Ошибка: {e}", exc_info=True)
+            await update.message.reply_text("Произошла ошибка. Попробуйте еще раз.")
     
     async def finish_request_creation(self, update_or_query, context: ContextTypes.DEFAULT_TYPE, request_data: dict, request_type: str):
         """Завершает создание заявки"""
@@ -891,8 +926,8 @@ class ConstructionBot:
                 **request_data
             )
             
-            # Добавляем в Google Sheets
-            sheets_manager.add_request(request, db_user)
+            # Добавляем в Google Sheets через синхронизацию
+            sheets_sync.add_request_to_sheets(request, db_user)
             
             # Очищаем данные пользователя
             context.user_data.pop('creating_request', None)
