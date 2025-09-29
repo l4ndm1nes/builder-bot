@@ -58,6 +58,9 @@ class RequestHandler:
         step = handler_data.get('step', 0)
         data = handler_data.get('data', {})
         
+        logger.info(f"🔄 process_step: type={request_type}, step={step}, text='{text}'")
+        logger.info(f"📊 total_steps={len(self.steps.get(request_type, []))}")
+        
         if not request_type or step >= len(self.steps[request_type]):
             return {'error': 'Неверный шаг'}
         
@@ -97,10 +100,12 @@ class RequestHandler:
         
         # Проверяем, закончились ли шаги
         if step >= len(self.steps[request_type]):
+            logger.info(f"✅ process_step: Все шаги пройдены, step={step}, total={len(self.steps[request_type])}")
             return {'completed': True, 'data': data, 'type': request_type}
         
         # Возвращаем следующий вопрос
         next_question = self.steps[request_type][step]['question']
+        logger.info(f"➡️ process_step: Переходим к шагу {step+1}, вопрос: {next_question[:50]}...")
         return {'question': next_question}
     
     def create_contact_preference_keyboard(self):
