@@ -405,6 +405,7 @@ class ConstructionBot:
         """Начинает поток создания заявки"""
         context.user_data['creating_request'] = True
         context.user_data['request_type'] = request_type
+        context.user_data['request_step'] = 1
         context.user_data['request_data'] = {}
         
         if request_type == 'client':
@@ -718,6 +719,7 @@ class ConstructionBot:
     
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик текстовых сообщений"""
+        
         if context.user_data.get('creating_request'):
             await self.handle_request_creation(update, context)
         elif context.user_data.get('waiting_for_phone'):
@@ -781,6 +783,7 @@ class ConstructionBot:
         request_data = context.user_data.get('request_data', {})
         request_type = context.user_data.get('request_type')
         step = context.user_data.get('request_step', 1)
+        
         
         
         if step == 1:
