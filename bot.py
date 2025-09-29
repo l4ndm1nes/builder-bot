@@ -219,31 +219,37 @@ class ConstructionBot:
             await update.message.reply_text("❌ У вас нет прав администратора.")
             return
         
-        from database import SessionLocal, Request, User
-        db = SessionLocal()
         try:
-            requests = db.query(Request).order_by(Request.created_at.desc()).limit(10).all()
-            
-            text = "📋 **Последние 10 заявок:**\n\n"
-            for req in requests:
-                user = db.query(User).filter(User.id == req.user_id).first()
-                type_emoji = "🔍" if req.request_type == "client" else "🚛"
-                contact_emoji = "💬" if req.contact_preference == "message" else "📞"
+            from database import SessionLocal, Request, User
+            db = SessionLocal()
+            try:
+                requests = db.query(Request).order_by(Request.created_at.desc()).limit(10).all()
                 
-                text += f"{type_emoji} **ID: {req.id}**\n"
-                text += f"👤 {user.first_name if user else 'Неизвестно'}\n"
-                text += f"📍 {req.location}\n"
-                text += f"📝 {req.title}\n"
-                text += f"{contact_emoji} {req.contact_preference}\n"
-                text += f"📅 {req.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
-            
-            if not requests:
-                text = "📋 Заявок пока нет."
+                text = "📋 **Последние 10 заявок:**\n\n"
+                for req in requests:
+                    user = db.query(User).filter(User.id == req.user_id).first()
+                    type_emoji = "🔍" if req.request_type == "client" else "🚛"
+                    contact_pref = req.contact_preference or "message"
+                    contact_emoji = "💬" if contact_pref == "message" else "📞"
+                    
+                    text += f"{type_emoji} **ID: {req.id}**\n"
+                    text += f"👤 {user.first_name if user else 'Неизвестно'}\n"
+                    text += f"📍 {req.location}\n"
+                    text += f"📝 {req.title}\n"
+                    text += f"{contact_emoji} {contact_pref}\n"
+                    text += f"📅 {req.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
                 
-        finally:
-            db.close()
-        
-        await update.message.reply_text(text, parse_mode='Markdown')
+                if not requests:
+                    text = "📋 Заявок пока нет."
+                    
+            finally:
+                db.close()
+            
+            await update.message.reply_text(text, parse_mode='Markdown')
+            
+        except Exception as e:
+            logger.error(f"requests_command: Ошибка: {e}", exc_info=True)
+            await update.message.reply_text(f"❌ Ошибка при получении заявок: {str(e)}")
     
     async def send_message_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Отправить сообщение пользователю"""
