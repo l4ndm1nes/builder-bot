@@ -9,6 +9,7 @@ from telegram.ext import ContextTypes
 from database import get_or_create_user, create_request
 from sync_sheets import sheets_sync
 from config import Config
+from models import User
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,7 @@ class RequestHandler:
             'step': 0,
             'data': {}
         }
+        print(f"DEBUG: start_request - request_type={request_type}, user_data={context.user_data}")
         # Возвращаем первый вопрос
         return self.steps[request_type][0]['question']
     
@@ -53,23 +55,22 @@ class RequestHandler:
         return self.steps[request_type][step]['question']
     
     def process_step(self, text: str, context: ContextTypes.DEFAULT_TYPE):
-        """Обрабатывает ответ на текущий шаг"""
         handler_data = context.user_data.get('request_handler', {})
         request_type = handler_data.get('type')
         step = handler_data.get('step', 0)
         data = handler_data.get('data', {})
         
-        logger.info(f"🔄 process_step: type={request_type}, step={step}, text='{text}'")
-        logger.info(f"📊 total_steps={len(self.steps.get(request_type, []))}")
+        print(f"DEBUG: step={step}, request_type={request_type}")
         
         if not request_type or step >= len(self.steps[request_type]):
-            return {'error': 'Неверный шаг'}
+            return {'error': 'Ошибка'}
         
         step_config = self.steps[request_type][step]
         key = step_config['key']
         value_type = step_config.get('type', 'str')
         
-        # Валидация и преобразование типов
+        print(f"DEBUG: key={key}, value_type={value_type}")
+        
         try:
             if value_type == 'int':
                 value = int(text)
@@ -78,36 +79,21 @@ class RequestHandler:
             else:
                 value = text
         except ValueError:
-            error_msg = {
-                'int': 'Пожалуйста, укажите число:',
-                'float': 'Пожалуйста, укажите число:'
-            }.get(value_type, 'Неверный формат:')
-            return {'error': error_msg}
+            return {'error': 'Укажите число'}
         
-        # Сохраняем данные
         data[key] = value
-        
-        # Обновляем телефон пользователя если это поле phone
-        if key == 'phone':
-            data['user_phone'] = value
-        
-        # Переходим к следующему шагу
         step += 1
+        
         context.user_data['request_handler'] = {
             'type': request_type,
             'step': step,
             'data': data
         }
         
-        # Проверяем, закончились ли шаги
         if step >= len(self.steps[request_type]):
-            logger.info(f"✅ process_step: Все шаги пройдены, step={step}, total={len(self.steps[request_type])}")
             return {'completed': True, 'data': data, 'type': request_type}
         
-        # Возвращаем следующий вопрос
-        next_question = self.steps[request_type][step]['question']
-        logger.info(f"➡️ process_step: Переходим к шагу {step+1}, вопрос: {next_question[:50]}...")
-        return {'question': next_question}
+        return {'question': self.steps[request_type][step]['question']}
     
     def create_contact_preference_keyboard(self):
         """Создает клавиатуру для выбора способа связи"""
@@ -141,16 +127,28 @@ class RequestHandler:
                 last_name=user.last_name
             )
             
-            # Обновляем телефон если указан
-            if 'user_phone' in data:
+            # Обновляем телефон если указан (для исполнителей)
+            if request_type == 'contractor' and 'phone' in data:
                 from database import SessionLocal
                 db = SessionLocal()
                 try:
-                    db_user = db.merge(db_user)
-                    db_user.phone = data['user_phone']
-                    db.commit()
+                    # Получаем пользователя в новой сессии
+                    fresh_user = db.query(User).filter(User.telegram_id == user.id).first()
+                    if fresh_user:
+                        fresh_user.phone = data['phone']
+                        db.commit()
+                        # Обновляем db_user.id для создания заявки
+                        user_id = fresh_user.id
+                    else:
+                        logger.error(f"Пользователь с telegram_id {user.id} не найден")
+                        user_id = db_user.id
+                except Exception as e:
+                    logger.error(f"Ошибка обновления телефона: {e}")
+                    user_id = db_user.id
                 finally:
                     db.close()
+            else:
+                user_id = db_user.id
             
             # Создаем заголовок
             if request_type == 'client':
@@ -162,8 +160,12 @@ class RequestHandler:
             request_data = data.copy()
             request_data['contact_preference'] = contact_preference
             
+            # Убираем phone из данных заявки (он относится к User, а не к Request)
+            if 'phone' in request_data:
+                del request_data['phone']
+            
             request = create_request(
-                user_id=db_user.id,
+                user_id=user_id,
                 request_type=request_type,
                 title=title,
                 **request_data

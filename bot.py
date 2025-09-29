@@ -6,7 +6,7 @@ from google_sheets import sheets_manager
 from sync_sheets import sheets_sync
 from models import User, Request
 from config import Config
-from request_handler import request_handler
+from request_system import request_system
 import re
 
 def is_admin(user_id):
@@ -27,6 +27,12 @@ class ConstructionBot:
     
     def setup_handlers(self):
         """Настраивает обработчики команд"""
+        # Добавляем общий логгер для всех апдейтов
+        async def log_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            logger.info(f"📨 Получен update: {update}")
+            
+        self.application.add_handler(MessageHandler(filters.ALL, log_update), group=-1)
+        
         # Команды
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("help", self.help_command))
@@ -48,6 +54,7 @@ class ConstructionBot:
     
     async def start_command(self, update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /start"""
+        logger.info(f"=== START COMMAND от пользователя {update.effective_user.id if hasattr(update, 'effective_user') and update.effective_user else 'Unknown'}")
         try:
             # Получаем пользователя в зависимости от типа update
             if hasattr(update, 'effective_user') and update.effective_user:
@@ -334,29 +341,39 @@ class ConstructionBot:
             elif data == "my_requests":
                 logger.info("button_callback: Обрабатываем my_requests")
                 await self.show_my_requests(query, context)
-            elif data == "start_menu":
-                logger.info("button_callback: Обрабатываем start_menu")
-                await self.start_command(query, context)
-            elif data.startswith("create_request_"):
-                request_type = data.split("_")[2]
-                logger.info(f"button_callback: Обрабатываем create_request_{request_type}")
-                await self.create_request_flow(query, context, request_type)
-            elif data == "toggle_mode":
-                logger.info("button_callback: Обрабатываем toggle_mode")
-                await self.toggle_mode(query, context)
-            elif data == "set_phone":
-                logger.info("button_callback: Обрабатываем set_phone")
-                await self.set_phone(query, context)
-            elif data == "contact_message":
-                logger.info("button_callback: Обрабатываем contact_message")
-                await self.handle_contact_preference(query, context, "message")
-            elif data == "contact_call":
-                logger.info("button_callback: Обрабатываем contact_call")
-                await self.handle_contact_preference(query, context, "call")
+        elif data == "start_menu":
+            logger.info("button_callback: Обрабатываем start_menu")
+            # Сбрасываем данные заявки при возврате в главное меню
+            request_system.clear_context(context)
+            await self.start_command(query, context)
+        elif data.startswith("create_request_"):
+            request_type = data.split("_")[2]
+            logger.info(f"button_callback: Обрабатываем create_request_{request_type}")
+            if request_type == 'client':
+                await self.start_client_request(query, context)
             else:
-                # Обработка неизвестных callback'ов
-                logger.warning(f"button_callback: Неизвестный callback: {data}")
-                await query.edit_message_text("Неизвестная команда. Используйте /start для возврата в главное меню.")
+                await self.start_contractor_request(query, context)
+        elif data == "toggle_mode":
+            logger.info("button_callback: Обрабатываем toggle_mode")
+            await self.toggle_mode(query, context)
+        elif data == "set_phone":
+            logger.info("button_callback: Обрабатываем set_phone")
+            await self.set_phone(query, context)
+        elif data == "contact_message":
+            logger.info("button_callback: Обрабатываем contact_message")
+            await self.handle_contact_button(query, context, "contact_message")
+        elif data == "contact_call":
+            logger.info("button_callback: Обрабатываем contact_call")
+            await self.handle_contact_button(query, context, "contact_call")
+        elif data.startswith("reply_admin_"):
+            admin_id = int(data.split("_")[2])
+            context.user_data['replying_to_admin'] = True
+            context.user_data['admin_reply_target_id'] = admin_id
+            await query.edit_message_text("💬 Введите ваш ответ администратору:")
+        else:
+            # Обработка неизвестных callback'ов
+            logger.warning(f"button_callback: Неизвестный callback: {data}")
+            await query.edit_message_text("Неизвестная команда. Используйте /start для возврата в главное меню.")
         except Exception as e:
             logger.error(f"button_callback: Ошибка при обработке {data}: {e}", exc_info=True)
             try:
@@ -366,41 +383,16 @@ class ConstructionBot:
     
     async def start_client_request(self, query, context: ContextTypes.DEFAULT_TYPE):
         """Начинает процесс создания заявки клиента"""
-        question = request_handler.start_request('client', context)
-        await query.edit_message_text(f"🔍 Создание заявки клиента\n\n{question}")
+        question = request_system.start_request('client', context)
+        text = f"🔍 Создание заявки клиента\n\n{question}"
+        await query.edit_message_text(text)
     
     async def start_contractor_request(self, query, context: ContextTypes.DEFAULT_TYPE):
         """Начинает процесс создания заявки исполнителя"""
-        question = request_handler.start_request('contractor', context)
-        await query.edit_message_text(f"🚛 Создание заявки исполнителя\n\n{question}")
-    
-    async def create_request_flow(self, query, context: ContextTypes.DEFAULT_TYPE, request_type: str):
-        """Начинает поток создания заявки"""
-        context.user_data['creating_request'] = True
-        context.user_data['request_type'] = request_type
-        context.user_data['request_step'] = 1
-        context.user_data['request_data'] = {}
-        
-        if request_type == 'client':
-            text = """
-🔍 Создание заявки клиента
-
-Шаг 1/5: Тип техники
-
-Укажите тип строительной техники, которая вам нужна:
-(например: экскаватор, кран, бульдозер, самосвал, автобетоносмеситель)
-            """
-        else:
-            text = """
-🚛 Создание заявки исполнителя
-
-Шаг 1/5: Доступная техника
-
-Укажите какую строительную технику вы можете предоставить:
-(например: экскаватор JCB, кран 25т, бульдозер CAT)
-            """
-        
+        question = request_system.start_request('contractor', context)
+        text = f"🚛 Создание заявки исполнителя\n\n{question}"
         await query.edit_message_text(text)
+    
     
     async def show_profile(self, update, context: ContextTypes.DEFAULT_TYPE):
         """Показывает профиль пользователя"""
@@ -671,16 +663,23 @@ class ConstructionBot:
             await update.message.reply_text("Произошла ошибка при сохранении телефона. Попробуйте еще раз.")
     
     async def handle_contact_preference(self, query, context: ContextTypes.DEFAULT_TYPE, preference: str):
-        """Обрабатывает выбор способа связи"""
+        """Обрабатывает выбор способа связи (6-й шаг)"""
         try:
-            # Проверяем, используется ли новый обработчик
-            if context.user_data.get('request_handler'):
-                success = await request_handler.finish_request(query, context, preference)
-                if not success:
-                    await query.edit_message_text("Произошла ошибка при создании заявки. Попробуйте еще раз.")
-            else:
-                # Старая логика (пока оставим для совместимости)
-                await query.edit_message_text("Используйте /start для создания новой заявки.")
+            request_data = context.user_data.get('request_data', {})
+            request_type = context.user_data.get('request_type')
+            step = context.user_data.get('request_step', 0)
+            
+            logger.info(f"handle_contact_preference: step={step}, preference={preference}")
+            
+            if step != 6 or not request_data or not request_type:
+                await query.edit_message_text("Ошибка: данные заявки не найдены. Попробуйте создать заявку заново.")
+                return
+            
+            # Добавляем предпочтение связи
+            request_data['contact_preference'] = preference
+            
+            # Завершаем создание заявки
+            await self.finish_request_creation(query, context, request_data, request_type)
             
         except Exception as e:
             logger.error(f"handle_contact_preference: Ошибка: {e}", exc_info=True)
@@ -694,33 +693,338 @@ class ConstructionBot:
         logger.info(f"📊 user_data keys: {list(context.user_data.keys())}")
         logger.info(f"🔍 request_handler: {context.user_data.get('request_handler')}")
         
-        # Проверяем, создается ли заявка через новый обработчик
-        if context.user_data.get('request_handler'):
-            logger.info("✅ Используем новый обработчик")
-            await self.handle_new_request_step(update, context)
+        # Проверяем, создается ли заявка
+        if request_system.is_request_active(context):
+            logger.info("✅ Обрабатываем создание заявки")
+            await self.handle_request_step(update, context)
         elif context.user_data.get('waiting_for_phone'):
             logger.info("📞 Обрабатываем ввод телефона")
             await self.handle_phone_input(update, context)
+        elif context.user_data.get('replying_to_admin'):
+            logger.info("💬 Обрабатываем ответ админу")
+            await self.handle_admin_reply(update, context)
         else:
             logger.info("❌ Нет активных процессов, показываем справку")
             await update.message.reply_text(
                 "Используйте команды или кнопки для навигации. /help - для справки."
             )
     
-    async def handle_new_request_step(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обрабатывает шаг создания заявки через новый обработчик"""
+    async def handle_request_step(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обрабатывает шаг создания заявки"""
         text = update.message.text
-        result = request_handler.process_step(text, context)
+        result = request_system.process_text_input(text, context)
         
         if 'error' in result:
             await update.message.reply_text(result['error'])
         elif 'completed' in result:
-            # Заявка готова, предлагаем выбрать способ связи
-            contact_text = "📞 **Как с вами лучше связаться?**\n\nВыберите предпочтительный способ связи:"
-            keyboard = request_handler.create_contact_preference_keyboard()
-            await update.message.reply_text(contact_text, reply_markup=keyboard, parse_mode='Markdown')
+            # Заявка завершена, сохраняем
+            await self.save_completed_request(update, context)
+        elif 'buttons' in result:
+            # Нужно показать кнопки
+            keyboard = request_system.create_contact_buttons()
+            await update.message.reply_text(result['question'], reply_markup=keyboard)
         elif 'question' in result:
+            # Следующий вопрос
             await update.message.reply_text(result['question'])
+    
+    async def handle_contact_button(self, query, context: ContextTypes.DEFAULT_TYPE, button_data: str):
+        """Обрабатывает нажатие кнопки выбора связи"""
+        result = request_system.process_button_input(button_data, context)
+        
+        if 'error' in result:
+            await query.edit_message_text(result['error'])
+        elif 'completed' in result:
+            # Заявка завершена, сохраняем
+            await self.save_completed_request(query, context)
+    
+    async def save_completed_request(self, update_or_query, context: ContextTypes.DEFAULT_TYPE):
+        """Сохраняет завершенную заявку"""
+        try:
+            request_data = context.user_data.get('request_data', {})
+            request_type = context.user_data.get('request_type')
+            
+            # Получаем пользователя
+            if hasattr(update_or_query, 'effective_user') and update_or_query.effective_user:
+                user = update_or_query.effective_user
+            elif hasattr(update_or_query, 'from_user') and update_or_query.from_user:
+                user = update_or_query.from_user
+            else:
+                logger.error("save_completed_request: No user found")
+                return
+            
+            # Создаем пользователя в БД
+            db_user = get_or_create_user(
+                telegram_id=user.id,
+                username=user.username,
+                first_name=user.first_name,
+                last_name=user.last_name
+            )
+            
+            # Обновляем телефон если указан (для исполнителей)
+            if request_type == 'contractor' and 'phone' in request_data:
+                from database import SessionLocal
+                db = SessionLocal()
+                try:
+                    fresh_user = db.query(User).filter(User.telegram_id == user.id).first()
+                    if fresh_user:
+                        fresh_user.phone = request_data['phone']
+                        db.commit()
+                except Exception as e:
+                    logger.error(f"Ошибка обновления телефона: {e}")
+                finally:
+                    db.close()
+            
+            # Создаем заголовок
+            if request_type == 'client':
+                title = f"Ищу {request_data.get('equipment_type', 'технику')} в {request_data.get('location', '')}"
+            else:
+                title = f"Предлагаю {request_data.get('available_equipment', 'технику')} в {request_data.get('location', '')}"
+            
+            # Убираем phone из данных заявки (он относится к User, а не к Request)
+            request_data_for_db = request_data.copy()
+            if 'phone' in request_data_for_db:
+                del request_data_for_db['phone']
+            
+            # Создаем заявку
+            request = create_request(
+                user_id=db_user.id,
+                request_type=request_type,
+                title=title,
+                **request_data_for_db
+            )
+            
+            # Добавляем в Google Sheets
+            sheets_sync.add_request_to_sheets(request, db_user)
+            
+            # Уведомляем админа
+            await self.notify_admin_about_new_request(request, db_user)
+            
+            # Очищаем контекст
+            request_system.clear_context(context)
+            
+            success_text = f"""
+✅ Заявка успешно создана!
+
+🆔 ID заявки: {request.id}
+📋 Тип: {'Клиент' if request_type == 'client' else 'Исполнитель'}
+📍 Локация: {request_data.get('location', '')}
+📅 Создана: {request.created_at.strftime('%d.%m.%Y %H:%M')}
+
+Ваша заявка добавлена в систему и будет рассмотрена диспетчером. 
+Вы получите уведомления о подходящих совпадениях!
+            """
+            
+            keyboard = [
+                [InlineKeyboardButton("📋 Мои заявки", callback_data="my_requests")],
+                [InlineKeyboardButton("➕ Создать еще заявку", callback_data="start_menu")],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data="start_menu")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            # Отправляем сообщение в зависимости от типа объекта
+            if hasattr(update_or_query, 'message') and update_or_query.message:
+                await update_or_query.message.reply_text(success_text, reply_markup=reply_markup)
+            elif hasattr(update_or_query, 'edit_message_text'):
+                await update_or_query.edit_message_text(success_text, reply_markup=reply_markup)
+            else:
+                logger.error("save_completed_request: Cannot send message")
+                
+        except Exception as e:
+            logger.error(f"save_completed_request: Ошибка: {e}", exc_info=True)
+            if hasattr(update_or_query, 'edit_message_text'):
+                await update_or_query.edit_message_text("Произошла ошибка при создании заявки. Попробуйте еще раз.")
+            else:
+                await update_or_query.message.reply_text("Произошла ошибка при создании заявки. Попробуйте еще раз.")
+    
+    async def handle_admin_reply(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обрабатывает ответ пользователя админу"""
+        try:
+            user = update.effective_user
+            message_text = update.message.text
+            admin_id = context.user_data.get('admin_reply_target_id')
+            
+            if not admin_id:
+                await update.message.reply_text("Ошибка: не найден адрес получателя.")
+                return
+            
+            # Формируем сообщение для админа
+            reply_message = f"💬 **Ответ от пользователя:**\n" \
+                           f"👤 ID: `{user.id}`\n" \
+                           f"Имя: {user.first_name} {user.last_name or ''}\n" \
+                           f"Username: @{user.username or 'Не указан'}\n\n" \
+                           f"💬 **Сообщение:**\n{message_text}"
+            
+            # Отправляем ответ админу
+            from telegram import Bot
+            bot = Bot(token=Config.TELEGRAM_BOT_TOKEN)
+            await bot.send_message(
+                chat_id=admin_id,
+                text=reply_message,
+                parse_mode='Markdown'
+            )
+            
+            # Уведомляем пользователя
+            await update.message.reply_text("✅ Ваш ответ отправлен администратору.")
+            
+            # Очищаем состояние
+            context.user_data.pop('replying_to_admin', None)
+            context.user_data.pop('admin_reply_target_id', None)
+            
+        except Exception as e:
+            logger.error(f"handle_admin_reply: Ошибка: {e}")
+            await update.message.reply_text("Произошла ошибка при отправке ответа. Попробуйте еще раз.")
+    
+    async def ask_contact_preference(self, update: Update, context: ContextTypes.DEFAULT_TYPE, request_data: dict, request_type: str):
+        """Спрашивает предпочтения по способу связи"""
+        try:
+            text = """
+📞 **Как с вами лучше связаться?**
+
+Выберите предпочтительный способ связи:
+            """
+            
+            keyboard = [
+                [InlineKeyboardButton("💬 Написать в Telegram", callback_data="contact_message")],
+                [InlineKeyboardButton("📞 Позвонить по телефону", callback_data="contact_call")],
+                [InlineKeyboardButton("❌ Отмена", callback_data="start_menu")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+            
+        except Exception as e:
+            logger.error(f"ask_contact_preference: Ошибка: {e}")
+            await update.message.reply_text("Произошла ошибка. Попробуйте еще раз.")
+    
+    async def finish_request_creation(self, update_or_query, context: ContextTypes.DEFAULT_TYPE, request_data: dict, request_type: str):
+        """Завершает создание заявки"""
+        try:
+            logger.info(f"finish_request_creation: request_data={request_data}, request_type={request_type}")
+            
+            # Получаем пользователя
+            if hasattr(update_or_query, 'effective_user') and update_or_query.effective_user:
+                user = update_or_query.effective_user
+            elif hasattr(update_or_query, 'from_user') and update_or_query.from_user:
+                user = update_or_query.from_user
+            else:
+                logger.error("finish_request_creation: No user found")
+                return
+            
+            # Создаем пользователя в БД
+            db_user = get_or_create_user(
+                telegram_id=user.id,
+                username=user.username,
+                first_name=user.first_name,
+                last_name=user.last_name
+            )
+            
+            # Обновляем телефон если указан (для исполнителей)
+            if request_type == 'contractor' and 'phone' in request_data:
+                from database import SessionLocal
+                db = SessionLocal()
+                try:
+                    fresh_user = db.query(User).filter(User.telegram_id == user.id).first()
+                    if fresh_user:
+                        fresh_user.phone = request_data['phone']
+                        db.commit()
+                except Exception as e:
+                    logger.error(f"Ошибка обновления телефона: {e}")
+                finally:
+                    db.close()
+            
+            # Создаем заголовок
+            if request_type == 'client':
+                title = f"Ищу {request_data.get('equipment_type', 'технику')} в {request_data.get('location', '')}"
+            else:
+                title = f"Предлагаю {request_data.get('available_equipment', 'технику')} в {request_data.get('location', '')}"
+            
+            # Создаем заявку
+            request = create_request(
+                user_id=db_user.id,
+                request_type=request_type,
+                title=title,
+                **request_data
+            )
+            
+            # Добавляем в Google Sheets
+            from sync_sheets import sheets_sync
+            sheets_sync.add_request_to_sheets(request, db_user)
+            
+            # Уведомляем админа
+            await self.notify_admin_about_new_request(request, db_user)
+            
+            # Очищаем данные пользователя
+            context.user_data.pop('creating_request', None)
+            context.user_data.pop('request_type', None)
+            context.user_data.pop('request_step', None)
+            context.user_data.pop('request_data', None)
+            
+            success_text = f"""
+✅ Заявка успешно создана!
+
+🆔 ID заявки: {request.id}
+📋 Тип: {'Клиент' if request_type == 'client' else 'Исполнитель'}
+📍 Локация: {request_data.get('location', '')}
+📅 Создана: {request.created_at.strftime('%d.%m.%Y %H:%M')}
+
+Ваша заявка добавлена в систему и будет рассмотрена диспетчером. 
+Вы получите уведомления о подходящих совпадениях!
+            """
+            
+            keyboard = [
+                [InlineKeyboardButton("📋 Мои заявки", callback_data="my_requests")],
+                [InlineKeyboardButton("➕ Создать еще заявку", callback_data="start_menu")],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data="start_menu")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            # Отправляем сообщение в зависимости от типа объекта
+            if hasattr(update_or_query, 'message') and update_or_query.message:
+                await update_or_query.message.reply_text(success_text, reply_markup=reply_markup)
+            elif hasattr(update_or_query, 'edit_message_text'):
+                await update_or_query.edit_message_text(success_text, reply_markup=reply_markup)
+            else:
+                logger.error("finish_request_creation: Cannot send message")
+                
+        except Exception as e:
+            logger.error(f"finish_request_creation: Ошибка: {e}", exc_info=True)
+            await update_or_query.message.reply_text("Произошла ошибка при создании заявки. Попробуйте еще раз.")
+    
+    async def notify_admin_about_new_request(self, request, user):
+        """Уведомляет админа о новой заявке"""
+        try:
+            admin_id = Config.ADMIN_USER_ID
+            if not admin_id:
+                return
+            
+            # Формируем сообщение для админа
+            type_emoji = "🔍" if request.request_type == "client" else "🚛"
+            contact_emoji = "💬" if request.contact_preference == "message" else "📞"
+            
+            admin_message = f"""
+🆕 **Новая заявка #{request.id}**
+
+{type_emoji} **Тип:** {'Клиент' if request.request_type == 'client' else 'Исполнитель'}
+👤 **Пользователь:** {user.first_name} {user.last_name or ''}
+📞 **Телефон:** {user.phone or 'Не указан'}
+📍 **Локация:** {request.location}
+📝 **Заголовок:** {request.title}
+{contact_emoji} **Связь:** {request.contact_preference}
+
+📅 **Создана:** {request.created_at.strftime('%d.%m.%Y %H:%M')}
+            """
+            
+            # Отправляем уведомление админу
+            from telegram import Bot
+            bot = Bot(token=Config.TELEGRAM_BOT_TOKEN)
+            await bot.send_message(
+                chat_id=admin_id,
+                text=admin_message,
+                parse_mode='Markdown'
+            )
+            
+        except Exception as e:
+            logger.error(f"notify_admin_about_new_request: Ошибка: {e}")
     
     async def forward_to_admin(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Пересылает сообщения админу"""
