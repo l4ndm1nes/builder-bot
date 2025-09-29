@@ -345,50 +345,38 @@ class ConstructionBot:
         text = """
 🔍 Создание заявки клиента
 
-Вы ищете строительную технику? Отлично!
+Шаг 1/5: Тип техники
 
-Для создания заявки мне понадобится следующая информация:
-• Тип техники (экскаватор, кран, бульдозер и т.д.)
-• Локация работ
-• Описание работ
-• Бюджет
-• Сроки выполнения
-
-Готовы начать?
+Укажите тип строительной техники, которая вам нужна:
+(например: экскаватор, кран, бульдозер, самосвал, автобетоносмеситель)
         """
         
-        keyboard = [
-            [InlineKeyboardButton("✅ Да, создать заявку", callback_data="create_request_client")],
-            [InlineKeyboardButton("❌ Отмена", callback_data="start_menu")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text)
         
-        await query.edit_message_text(text, reply_markup=reply_markup)
+        # Устанавливаем флаги для создания заявки
+        context.user_data['creating_request'] = True
+        context.user_data['request_type'] = 'client'
+        context.user_data['request_step'] = 1
+        context.user_data['request_data'] = {}
     
     async def start_contractor_request(self, query, context: ContextTypes.DEFAULT_TYPE):
         """Начинает процесс создания заявки исполнителя"""
         text = """
 🚛 Создание заявки исполнителя
 
-Вы предлагаете строительную технику? Отлично!
+Шаг 1/5: Тип техники
 
-Для создания заявки мне понадобится следующая информация:
-• Доступная техника
-• Локация работы
-• Опыт работы
-• Цены
-• Контактная информация
-
-Готовы начать?
+Какую технику вы предлагаете?
+(например: самосвал 25 тонн, трактор, автокран 50т)
         """
         
-        keyboard = [
-            [InlineKeyboardButton("✅ Да, создать заявку", callback_data="create_request_contractor")],
-            [InlineKeyboardButton("❌ Отмена", callback_data="start_menu")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text)
         
-        await query.edit_message_text(text, reply_markup=reply_markup)
+        # Устанавливаем флаги для создания заявки
+        context.user_data['creating_request'] = True
+        context.user_data['request_type'] = 'contractor'
+        context.user_data['request_step'] = 1
+        context.user_data['request_data'] = {}
     
     async def create_request_flow(self, query, context: ContextTypes.DEFAULT_TYPE, request_type: str):
         """Начинает поток создания заявки"""
