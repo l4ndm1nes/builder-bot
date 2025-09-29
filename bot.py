@@ -718,10 +718,6 @@ class ConstructionBot:
     
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик текстовых сообщений"""
-        # Отладочная информация
-        logger.info(f"handle_message: creating_request={context.user_data.get('creating_request')}, waiting_for_phone={context.user_data.get('waiting_for_phone')}, waiting_for_contact_preference={context.user_data.get('waiting_for_contact_preference')}")
-        logger.info(f"handle_message: request_step={context.user_data.get('request_step')}, text='{update.message.text}'")
-        
         if context.user_data.get('creating_request'):
             await self.handle_request_creation(update, context)
         elif context.user_data.get('waiting_for_phone'):
@@ -730,14 +726,9 @@ class ConstructionBot:
             # Это не должно происходить, так как выбор через кнопки
             await update.message.reply_text("Пожалуйста, выберите способ связи с помощью кнопок.")
         else:
-            # Пересылаем сообщения админу, если это не команда
-            user_id = update.effective_user.id
-            if not update.message.text.startswith('/'):
-                await self.forward_to_admin(update, context)
-            else:
-                await update.message.reply_text(
-                    "Используйте команды или кнопки для навигации. /help - для справки."
-                )
+            await update.message.reply_text(
+                "Используйте команды или кнопки для навигации. /help - для справки."
+            )
     
     async def forward_to_admin(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Пересылает сообщения админу"""
@@ -791,9 +782,6 @@ class ConstructionBot:
         request_type = context.user_data.get('request_type')
         step = context.user_data.get('request_step', 1)
         
-        # Отладочная информация
-        logger.info(f"handle_request_creation: step={step}, request_type={request_type}, text='{text}'")
-        logger.info(f"handle_request_creation: request_data={request_data}")
         
         if step == 1:
             if request_type == 'client':
@@ -944,6 +932,9 @@ class ConstructionBot:
             # Добавляем в Google Sheets через синхронизацию
             sheets_sync.add_request_to_sheets(request, db_user)
             
+            # Уведомляем админа о новой заявке
+            await self.notify_admin_about_new_request(request, db_user)
+            
             # Очищаем данные пользователя
             context.user_data.pop('creating_request', None)
             context.user_data.pop('request_type', None)
@@ -978,6 +969,42 @@ class ConstructionBot:
             
         finally:
             db.close()
+    
+    async def notify_admin_about_new_request(self, request, user):
+        """Уведомляет админа о новой заявке"""
+        try:
+            admin_id = Config.ADMIN_USER_ID
+            if not admin_id:
+                return
+            
+            # Формируем сообщение для админа
+            type_emoji = "🔍" if request.request_type == "client" else "🚛"
+            contact_emoji = "💬" if request.contact_preference == "message" else "📞"
+            
+            admin_message = f"""
+🆕 **Новая заявка #{request.id}**
+
+{type_emoji} **Тип:** {'Клиент' if request.request_type == 'client' else 'Исполнитель'}
+👤 **Пользователь:** {user.first_name} {user.last_name or ''}
+📞 **Телефон:** {user.phone or 'Не указан'}
+📍 **Локация:** {request.location}
+📝 **Заголовок:** {request.title}
+{contact_emoji} **Связь:** {request.contact_preference}
+
+📅 **Создана:** {request.created_at.strftime('%d.%m.%Y %H:%M')}
+            """
+            
+            # Отправляем уведомление админу
+            from telegram import Bot
+            bot = Bot(token=Config.TELEGRAM_BOT_TOKEN)
+            await bot.send_message(
+                chat_id=admin_id,
+                text=admin_message,
+                parse_mode='Markdown'
+            )
+            
+        except Exception as e:
+            logger.error(f"notify_admin_about_new_request: Ошибка: {e}")
     
     def run(self):
         """Запускает бота"""
