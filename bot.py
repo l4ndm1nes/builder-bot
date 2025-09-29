@@ -912,43 +912,44 @@ class ConstructionBot:
             else:
                 logger.error("finish_request_creation: No user found")
                 return
-        from database import SessionLocal
-        db = SessionLocal()
-        try:
-            db_user = get_or_create_user(
-                telegram_id=user.id,
-                username=user.username,
-                first_name=user.first_name,
-                last_name=user.last_name
-            )
             
-            # Создаем заголовок
-            if request_type == 'client':
-                title = f"Ищу {request_data.get('equipment_type', 'технику')} в {request_data.get('location', '')}"
-            else:
-                title = f"Предлагаю {request_data.get('available_equipment', 'технику')} в {request_data.get('location', '')}"
-            
-            # Создаем заявку в базе данных
-            request = create_request(
-                user_id=db_user.id,
-                request_type=request_type,
-                title=title,
-                contact_preference=request_data.get('contact_preference', 'message'),
-                **request_data
-            )
-            
-            # Добавляем в Google Sheets через синхронизацию
-            sheets_sync.add_request_to_sheets(request, db_user)
-            
-            # Уведомляем админа о новой заявке
-            await self.notify_admin_about_new_request(request, db_user)
-            
-            # Очищаем данные пользователя
-            context.user_data.pop('creating_request', None)
-            context.user_data.pop('request_type', None)
-            context.user_data.pop('request_data', None)
-            
-            success_text = f"""
+            from database import SessionLocal
+            db = SessionLocal()
+            try:
+                db_user = get_or_create_user(
+                    telegram_id=user.id,
+                    username=user.username,
+                    first_name=user.first_name,
+                    last_name=user.last_name
+                )
+                
+                # Создаем заголовок
+                if request_type == 'client':
+                    title = f"Ищу {request_data.get('equipment_type', 'технику')} в {request_data.get('location', '')}"
+                else:
+                    title = f"Предлагаю {request_data.get('available_equipment', 'технику')} в {request_data.get('location', '')}"
+                
+                # Создаем заявку в базе данных
+                request = create_request(
+                    user_id=db_user.id,
+                    request_type=request_type,
+                    title=title,
+                    contact_preference=request_data.get('contact_preference', 'message'),
+                    **request_data
+                )
+                
+                # Добавляем в Google Sheets через синхронизацию
+                sheets_sync.add_request_to_sheets(request, db_user)
+                
+                # Уведомляем админа о новой заявке
+                await self.notify_admin_about_new_request(request, db_user)
+                
+                # Очищаем данные пользователя
+                context.user_data.pop('creating_request', None)
+                context.user_data.pop('request_type', None)
+                context.user_data.pop('request_data', None)
+                
+                success_text = f"""
 ✅ Заявка успешно создана!
 
 🆔 ID заявки: {request.id}
@@ -958,25 +959,33 @@ class ConstructionBot:
 
 Ваша заявка добавлена в систему и будет рассмотрена диспетчером. 
 Вы получите уведомления о подходящих совпадениях!
-            """
+                """
+                
+                keyboard = [
+                    [InlineKeyboardButton("📋 Мои заявки", callback_data="my_requests")],
+                    [InlineKeyboardButton("➕ Создать еще заявку", callback_data="start_menu")],
+                    [InlineKeyboardButton("🏠 Главное меню", callback_data="start_menu")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                # Отправляем сообщение в зависимости от типа объекта
+                if hasattr(update_or_query, 'message') and update_or_query.message:
+                    await update_or_query.message.reply_text(success_text, reply_markup=reply_markup)
+                elif hasattr(update_or_query, 'edit_message_text'):
+                    await update_or_query.edit_message_text(success_text, reply_markup=reply_markup)
+                else:
+                    logger.error("finish_request_creation: Cannot send message")
+                
+            finally:
+                db.close()
             
-            keyboard = [
-                [InlineKeyboardButton("📋 Мои заявки", callback_data="my_requests")],
-                [InlineKeyboardButton("➕ Создать еще заявку", callback_data="start_menu")],
-                [InlineKeyboardButton("🏠 Главное меню", callback_data="start_menu")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            # Отправляем сообщение в зависимости от типа объекта
+        except Exception as e:
+            logger.error(f"finish_request_creation: Ошибка: {e}", exc_info=True)
+            # Отправляем сообщение об ошибке
             if hasattr(update_or_query, 'message') and update_or_query.message:
-                await update_or_query.message.reply_text(success_text, reply_markup=reply_markup)
+                await update_or_query.message.reply_text("Произошла ошибка при создании заявки. Попробуйте еще раз.")
             elif hasattr(update_or_query, 'edit_message_text'):
-                await update_or_query.edit_message_text(success_text, reply_markup=reply_markup)
-            else:
-                logger.error("finish_request_creation: Cannot send message")
-            
-        finally:
-            db.close()
+                await update_or_query.edit_message_text("Произошла ошибка при создании заявки. Попробуйте еще раз.")
     
     async def notify_admin_about_new_request(self, request, user):
         """Уведомляет админа о новой заявке"""
