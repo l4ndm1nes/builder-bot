@@ -6,6 +6,7 @@ from google_sheets import sheets_manager
 from sync_sheets import sheets_sync
 from models import User, Request
 from config import Config
+from request_handler import request_handler
 import re
 
 def is_admin(user_id):
@@ -365,41 +366,13 @@ class ConstructionBot:
     
     async def start_client_request(self, query, context: ContextTypes.DEFAULT_TYPE):
         """Начинает процесс создания заявки клиента"""
-        text = """
-🔍 Создание заявки клиента
-
-Шаг 1/5: Тип техники
-
-Укажите тип строительной техники, которая вам нужна:
-(например: экскаватор, кран, бульдозер, самосвал, автобетоносмеситель)
-        """
-        
-        await query.edit_message_text(text)
-        
-        # Устанавливаем флаги для создания заявки
-        context.user_data['creating_request'] = True
-        context.user_data['request_type'] = 'client'
-        context.user_data['request_step'] = 1
-        context.user_data['request_data'] = {}
+        question = request_handler.start_request('client', context)
+        await query.edit_message_text(f"🔍 Создание заявки клиента\n\n{question}")
     
     async def start_contractor_request(self, query, context: ContextTypes.DEFAULT_TYPE):
         """Начинает процесс создания заявки исполнителя"""
-        text = """
-🚛 Создание заявки исполнителя
-
-Шаг 1/5: Тип техники
-
-Какую технику вы предлагаете?
-(например: самосвал 25 тонн, трактор, автокран 50т)
-        """
-        
-        await query.edit_message_text(text)
-        
-        # Устанавливаем флаги для создания заявки
-        context.user_data['creating_request'] = True
-        context.user_data['request_type'] = 'contractor'
-        context.user_data['request_step'] = 1
-        context.user_data['request_data'] = {}
+        question = request_handler.start_request('contractor', context)
+        await query.edit_message_text(f"🚛 Создание заявки исполнителя\n\n{question}")
     
     async def create_request_flow(self, query, context: ContextTypes.DEFAULT_TYPE, request_type: str):
         """Начинает поток создания заявки"""
@@ -700,20 +673,14 @@ class ConstructionBot:
     async def handle_contact_preference(self, query, context: ContextTypes.DEFAULT_TYPE, preference: str):
         """Обрабатывает выбор способа связи"""
         try:
-            # Получаем данные заявки
-            request_data = context.user_data.get('request_data', {})
-            request_type = context.user_data.get('request_type', 'client')
-            
-            logger.info(f"handle_contact_preference: preference={preference}, request_data={request_data}")
-            
-            # Добавляем предпочтение связи
-            request_data['contact_preference'] = preference
-            
-            # Очищаем только флаг ожидания
-            context.user_data.pop('waiting_for_contact_preference', None)
-            
-            # Создаем заявку
-            await self.finish_request_creation(query, context, request_data, request_type)
+            # Проверяем, используется ли новый обработчик
+            if context.user_data.get('request_handler'):
+                success = await request_handler.finish_request(query, context, preference)
+                if not success:
+                    await query.edit_message_text("Произошла ошибка при создании заявки. Попробуйте еще раз.")
+            else:
+                # Старая логика (пока оставим для совместимости)
+                await query.edit_message_text("Используйте /start для создания новой заявки.")
             
         except Exception as e:
             logger.error(f"handle_contact_preference: Ошибка: {e}", exc_info=True)
@@ -722,17 +689,30 @@ class ConstructionBot:
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик текстовых сообщений"""
         
-        if context.user_data.get('creating_request'):
-            await self.handle_request_creation(update, context)
+        # Проверяем, создается ли заявка через новый обработчик
+        if context.user_data.get('request_handler'):
+            await self.handle_new_request_step(update, context)
         elif context.user_data.get('waiting_for_phone'):
             await self.handle_phone_input(update, context)
-        elif context.user_data.get('waiting_for_contact_preference'):
-            # Это не должно происходить, так как выбор через кнопки
-            await update.message.reply_text("Пожалуйста, выберите способ связи с помощью кнопок.")
         else:
             await update.message.reply_text(
                 "Используйте команды или кнопки для навигации. /help - для справки."
             )
+    
+    async def handle_new_request_step(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обрабатывает шаг создания заявки через новый обработчик"""
+        text = update.message.text
+        result = request_handler.process_step(text, context)
+        
+        if 'error' in result:
+            await update.message.reply_text(result['error'])
+        elif 'completed' in result:
+            # Заявка готова, предлагаем выбрать способ связи
+            contact_text = "📞 **Как с вами лучше связаться?**\n\nВыберите предпочтительный способ связи:"
+            keyboard = request_handler.create_contact_preference_keyboard()
+            await update.message.reply_text(contact_text, reply_markup=keyboard, parse_mode='Markdown')
+        elif 'question' in result:
+            await update.message.reply_text(result['question'])
     
     async def forward_to_admin(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Пересылает сообщения админу"""
